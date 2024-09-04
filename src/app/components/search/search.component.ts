@@ -1,80 +1,78 @@
 import { Component } from '@angular/core';
-import { catchError, combineLatest, debounceTime, delay, filter, fromEvent, of, switchMap } from 'rxjs';
+import { Observable, catchError, combineLatest, debounceTime, delay, distinctUntilChanged, filter, finalize, fromEvent, map, of, switchMap } from 'rxjs';
 import { CombinedData } from '../../model/combined-data.model';
 import { ApiService } from '../../services/api.service';
 import { CommonModule } from '@angular/common';
+import { FormControl, ReactiveFormsModule } from '@angular/forms';
+
+
+interface UserDetails {
+  id: number;
+  name: string;
+  email: string;
+}
+
+interface UserPost {
+  userId: number;
+  title: string;
+  content: string;
+}
 
 @Component({
   selector: 'app-search',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, ReactiveFormsModule],
   templateUrl: './search.component.html',
   styleUrl: './search.component.scss'
 })
 export class SearchComponent {
-  searchResults: any[] = [];
-  combinedData: CombinedData | null = null;
-  searchError: string | null = null;
-  dataError: string | null = null;
-  loadingSearch = false;
-  loadingData = false;
+
+  searchControl = new FormControl('');
+  results: string[] = [];
+  errorMessage: string = '';
+  isLoadingSearch: boolean = false;
+  isLoadingCombinedData: boolean = false;
+  combinedData$!: Observable<{ name: string; email: string; posts: UserPost[] }>;
 
   constructor(public api: ApiService) {}
 
+
   ngOnInit() {
-    this.setupSearchObservable();
-    this.setupCombinedDataObservable();
-  }
-
-  // ngAfterViewInit() {
-  //   const searchInput = document.getElementById('searchInput') as HTMLInputElement;
-  // }
-
-  setupSearchObservable() {
-    const searchInput = document.getElementById('search-input') as HTMLInputElement;
-    const search$ = fromEvent(searchInput, 'input').pipe(
+    // Task 1: Implement Debounced Search with Error Handling and Loading State
+    this.searchControl.valueChanges.pipe(
       debounceTime(300),
-      filter((event: any) => event.target.value.length >= 3),
-      switchMap((event: any) => {
-        this.loadingSearch = true;
-        return this.adviceApiCall();
+      distinctUntilChanged(),
+      filter((term: string | null): term is string => term !== null && term.length >= 3),
+      switchMap(term => {
+        this.isLoadingSearch = true;
+        return this.api.search(term).pipe(
+          catchError(error => {
+            this.errorMessage = 'Search error occurred!';
+            return of([]);
+          }),
+          finalize(() => this.isLoadingSearch = false)
+        );
+      })
+    ).subscribe(results => {
+      this.results = results;
+      this.errorMessage = results.length === 0 ? this.errorMessage : '';
+    });
+
+    // Task 2: Combine Data from Multiple Endpoints with Error Handling and Loading State
+    this.isLoadingCombinedData = true;
+    this.combinedData$ = combineLatest([
+      this.api.getUserDetails(),
+      this.api.getUserPosts()
+    ]).pipe(
+      map(([userDetails, userPosts]) => ({
+        ...userDetails,
+        posts: userPosts.filter((post: UserPost) => post.userId === userDetails.id)
+      })),
+      catchError(error => {
+        this.errorMessage = 'Data combination error occurred!';
+        return of({ name: '', email: '', posts: [] });
       }),
-      catchError(error => {
-        this.searchError = 'Error fetching search results';
-        this.loadingSearch = false;
-        return of([]); // return empty array in case of error
-      })
+      finalize(() => this.isLoadingCombinedData = false)
     );
-
-    search$.subscribe(results => {
-      this.searchResults = results;
-      this.loadingSearch = false;
-    });
-  }
-
-  adviceApiCall() {
-    return of([this.api.showAdvice()]).pipe(
-      delay(1000) // simulate network delay
-    );
-  }
-
-  setupCombinedDataObservable() {
-    this.loadingData = true;
-    
-    const userDetails$ = of([1,3,4,5]).pipe(delay(1000));
-    const userPosts$ = of(['this', 'is', 'it']).pipe(delay(1500));
-
-    const combinedData$ = combineLatest([userDetails$, userPosts$]).pipe(
-      catchError(error => {
-        this.dataError = 'Error fetching combined data';
-        this.loadingData = false;
-        return of([null, null]); // return null in case of error
-      })
-    );
-
-    combinedData$.subscribe(([userDetails, userPosts]) => {
-      this.combinedData = { userDetails, userPosts };
-      this.loadingData = false;
-    });
   }
 }
